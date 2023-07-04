@@ -1,0 +1,822 @@
+{
+ "Parameters": {
+  "deployDistribution": {
+   "Type": "String",
+   "Default": "True",
+   "AllowedValues": [
+    "True",
+    "False"
+   ],
+   "Description": "If set to True, deploy a CloudFront Distribution that uses the API Gateway as origin and adds the API Key"
+  },
+  "apiGwArn": {
+   "Type": "String",
+   "Default": "arn:aws:apigateway:{region}:{account-id}:/restapis/{api-id}/stages/{stage-id}",
+   "Description": "ARN of the API Gateway you want to protect e.g. arn:aws:apigateway:{region}:{account-id}:/restapis/{api-id}/stages/{stage-id}"
+  },
+  "apiName": {
+   "Type": "String",
+   "Default": "PetStore",
+   "Description": "Name of the API Gateway you want to protect e.g. PetStore"
+  },
+  "apiKeyID": {
+   "Type": "String",
+   "Default": "abcde12345",
+   "Description": "The API Key ID that is active on the API Gateway Stage you would like to protect e.g.  abcde12345"
+  },
+  "wafMode": {
+   "Type": "String",
+   "Default": "Count",
+   "AllowedValues": [
+    "Count",
+    "Block"
+   ],
+   "Description": "The Web ACL mode; default is Count. IMPORTANT: We suggest initally deploy the rule as 'Count' and deploy as 'Block' after successful testing"
+  }
+ },
+ "Outputs": {
+  "apiGwEndpoint": {
+   "Value": {
+    "Fn::Join": [
+     ".",
+     [
+      {
+       "Fn::Select": [
+        2,
+        {
+         "Fn::Split": [
+          "/",
+          {
+           "Fn::Select": [
+            5,
+            {
+             "Fn::Split": [
+              ":",
+              {
+               "Ref": "apiGwArn"
+              }
+             ]
+            }
+           ]
+          }
+         ]
+        }
+       ]
+      },
+      "execute-api",
+      {
+       "Fn::Select": [
+        3,
+        {
+         "Fn::Split": [
+          ":",
+          {
+           "Ref": "apiGwArn"
+          }
+         ]
+        }
+       ]
+      },
+      "amazonaws.com"
+     ]
+    ]
+   }
+  },
+  "CloudFrontDistributionEndpoint": {
+   "Value": {
+    "Fn::GetAtt": [
+     "SampleDistributionForDynamicWAF59474D82",
+     "DomainName"
+    ]
+   }
+  }
+ },
+ "Conditions": {
+  "isBlock": {
+   "Fn::Equals": [
+    {
+     "Ref": "wafMode"
+    },
+    "Block"
+   ]
+  },
+  "EnableDistro": {
+   "Fn::Equals": [
+    {
+     "Ref": "deployDistribution"
+    },
+    "True"
+   ]
+  }
+ },
+ "Resources": {
+  "WAFACL": {
+   "Type": "AWS::WAFv2::WebACL",
+   "Properties": {
+    "DefaultAction": {
+     "Allow": {}
+    },
+    "Scope": "REGIONAL",
+    "VisibilityConfig": {
+     "CloudWatchMetricsEnabled": true,
+     "MetricName": "web-acl",
+     "SampledRequestsEnabled": true
+    },
+    "Rules": [
+     {
+      "Action": {
+       "Fn::If": [
+        "isBlock",
+        {
+         "block": {}
+        },
+        {
+         "count": {}
+        }
+       ]
+      },
+      "Name": "check-valid-api-key",
+      "Priority": 0,
+      "Statement": {
+       "NotStatement": {
+        "Statement": {
+         "ByteMatchStatement": {
+          "FieldToMatch": {
+           "SingleHeader": {
+            "name": "x-api-key"
+           }
+          },
+          "PositionalConstraint": "EXACTLY",
+          "SearchString": "will-be-updated-by-lambda",
+          "TextTransformations": [
+           {
+            "Priority": 0,
+            "Type": "NONE"
+           }
+          ]
+         }
+        }
+       }
+      },
+      "VisibilityConfig": {
+       "CloudWatchMetricsEnabled": true,
+       "MetricName": "check-valid-api-key",
+       "SampledRequestsEnabled": true
+      }
+     }
+    ]
+   },
+   "Metadata": {
+    "aws:cdk:path": "DynamicWafApiGwStack/WAF ACL"
+   }
+  },
+  "Role1ABCC5F0": {
+   "Type": "AWS::IAM::Role",
+   "Properties": {
+    "AssumeRolePolicyDocument": {
+     "Statement": [
+      {
+       "Action": "sts:AssumeRole",
+       "Effect": "Allow",
+       "Principal": {
+        "Service": "lambda.amazonaws.com"
+       }
+      }
+     ],
+     "Version": "2012-10-17"
+    },
+    "Description": "Allows Lambda to update & attach the WebACL to API GW",
+    "ManagedPolicyArns": [
+     {
+      "Fn::Join": [
+       "",
+       [
+        "arn:",
+        {
+         "Ref": "AWS::Partition"
+        },
+        ":iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+       ]
+      ]
+     }
+    ],
+    "Policies": [
+     {
+      "PolicyDocument": {
+       "Statement": [
+        {
+         "Action": [
+          "apigateway:SetWebACL",
+          "wafv2:AssociateWebACL",
+          "wafv2:GetWebACL",
+          "wafv2:UpdateWebACL"
+         ],
+         "Effect": "Allow",
+         "Resource": [
+          {
+           "Fn::GetAtt": [
+            "WAFACL",
+            "Arn"
+           ]
+          },
+          {
+           "Ref": "apiGwArn"
+          }
+         ]
+        },
+        {
+         "Action": "apigateway:GET",
+         "Effect": "Allow",
+         "Resource": {
+          "Fn::Join": [
+           "",
+           [
+            "arn:aws:apigateway:",
+            {
+             "Fn::Select": [
+              3,
+              {
+               "Fn::Split": [
+                ":",
+                {
+                 "Ref": "apiGwArn"
+                }
+               ]
+              }
+             ]
+            },
+            "::/apikeys/",
+            {
+             "Ref": "apiKeyID"
+            }
+           ]
+          ]
+         }
+        }
+       ],
+       "Version": "2012-10-17"
+      },
+      "PolicyName": "allow-web-acl-update"
+     }
+    ]
+   },
+   "Metadata": {
+    "aws:cdk:path": "DynamicWafApiGwStack/Role/Resource"
+   }
+  },
+  "RoleDefaultPolicy5FFB7DAB": {
+   "Type": "AWS::IAM::Policy",
+   "Properties": {
+    "PolicyDocument": {
+     "Statement": [
+      {
+       "Action": "sqs:SendMessage",
+       "Effect": "Allow",
+       "Resource": {
+        "Fn::GetAtt": [
+         "managewafattachDeadLetterQueueF7503451",
+         "Arn"
+        ]
+       }
+      }
+     ],
+     "Version": "2012-10-17"
+    },
+    "PolicyName": "RoleDefaultPolicy5FFB7DAB",
+    "Roles": [
+     {
+      "Ref": "Role1ABCC5F0"
+     }
+    ]
+   },
+   "Metadata": {
+    "aws:cdk:path": "DynamicWafApiGwStack/Role/DefaultPolicy/Resource"
+   }
+  },
+  "managewafattachDeadLetterQueueF7503451": {
+   "Type": "AWS::SQS::Queue",
+   "Properties": {
+    "MessageRetentionPeriod": 1209600
+   },
+   "UpdateReplacePolicy": "Delete",
+   "DeletionPolicy": "Delete",
+   "Metadata": {
+    "aws:cdk:path": "DynamicWafApiGwStack/manage-waf-attach/DeadLetterQueue/Resource"
+   }
+  },
+  "managewafattachF1DBAB8B": {
+   "Type": "AWS::Lambda::Function",
+   "Properties": {
+    "Code": {
+     "ZipFile": "\n#Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.\n#SPDX-License-Identifier: MIT-0\nimport json\nimport os\nimport boto3\nfrom botocore.exceptions import ClientError\n\nwaf=boto3.client('wafv2')\napigw=boto3.client('apigateway')\n\ndef handler(event, context):\n\n    #print(event)\n    #get the information we need from the environment variables\n    webAclArn=os.getenv(\"WEB_ACL_ARN\")\n    apiGwArn=os.getenv(\"APIGW_ARN\")\n    apiKeyId=os.getenv(\"API_KEY\")\n\n    #do some parsing on the WebACL arn to get the name and id\n    webAclInfo=webAclArn.split(':')[5]\n    webAclName=webAclInfo.split('/')[2]\n    webAclId=webAclInfo.split('/')[3]\n    \n    \n    #parse the alarm coming from cloudwatch to check what's the current state\n    alarmData = json.loads(event['Records'][0]['Sns']['Message'])\n    alarmState = alarmData['NewStateValue']\n    print(\"new alarm state received. The alarm is now in \"+alarmState+\" state\")\n    \n    #retrieve the api key value from API GW\n    try:\n      api_key = apigw.get_api_key(apiKey=apiKeyId, includeValue=True)\n      api_key_value= api_key['value']\n    except ClientError as err:\n      print(err)\n    \n    \n    #retrieve WebACL information from WAF\n    webACL=waf.get_web_acl(\n      Name=webAclName,\n      Scope='REGIONAL',\n      Id=webAclId\n      )\n    print(webACL)\n    #iterate on the WAF rules until we find check-valid-api-key\n    for i in range(0,len(webACL['WebACL']['Rules'])):\n      if(webACL['WebACL']['Rules'][i]['Name']==\"check-valid-api-key\"):\n          #we found the rule, let's update the api key value with the one retrieved from API GW\n          #print(webACL['WebACL']['Rules'][i]['Statement']['NotStatement']['Statement']['ByteMatchStatement']['SearchString'])\n          webACL['WebACL']['Rules'][i]['Statement']['NotStatement']['Statement']['ByteMatchStatement']['SearchString']=api_key_value\n          #print(webACL['WebACL']['Rules'][i]['Action'])\n          break\n    #we update the web ACL with the information collected in previous steps\n    try:\n      wafWebACLRsp=waf.update_web_acl(\n      Name=webACL['WebACL']['Name'],\n      Scope='REGIONAL',\n      Id=webACL['WebACL']['Id'],\n      DefaultAction=webACL['WebACL']['DefaultAction'],\n      VisibilityConfig=webACL['WebACL']['VisibilityConfig'],\n      LockToken=webACL['LockToken'],\n      Rules=webACL['WebACL']['Rules']\n      )\n      print('Successfully updated WebACL '+webACL['WebACL']['Name'])\n    except ClientError as err:\n      print(err)\n    \n    if(alarmState=='ALARM'):\n      #if the alarm is active, let's attach the Web ACL to the API\n      print('alarm is active, associating webACL '+webAclArn+' to API '+apiGwArn)\n      waf.associate_web_acl(\n        WebACLArn=webAclArn,\n        ResourceArn=apiGwArn)\n    elif(alarmState=='OK'):\n      #if the situation went back to normal, let's remove the Web ACL from the API\n      print('alarm is not active, disassociating webACL fronm API '+apiGwArn)\n      waf.disassociate_web_acl(\n        ResourceArn=apiGwArn)\n        "
+    },
+    "Role": {
+     "Fn::GetAtt": [
+      "Role1ABCC5F0",
+      "Arn"
+     ]
+    },
+    "Architectures": [
+     "arm64"
+    ],
+    "DeadLetterConfig": {
+     "TargetArn": {
+      "Fn::GetAtt": [
+       "managewafattachDeadLetterQueueF7503451",
+       "Arn"
+      ]
+     }
+    },
+    "Environment": {
+     "Variables": {
+      "APIGW_ARN": {
+       "Ref": "apiGwArn"
+      },
+      "API_KEY": {
+       "Ref": "apiKeyID"
+      },
+      "WEB_ACL_ARN": {
+       "Fn::GetAtt": [
+        "WAFACL",
+        "Arn"
+       ]
+      }
+     }
+    },
+    "Handler": "index.handler",
+    "ReservedConcurrentExecutions": 2,
+    "Runtime": "python3.10",
+    "Timeout": 120
+   },
+   "DependsOn": [
+    "RoleDefaultPolicy5FFB7DAB",
+    "Role1ABCC5F0"
+   ],
+   "Metadata": {
+    "aws:cdk:path": "DynamicWafApiGwStack/manage-waf-attach/Resource"
+   }
+  },
+  "managewafattachsnsPermissionD8988650": {
+   "Type": "AWS::Lambda::Permission",
+   "Properties": {
+    "Action": "lambda:InvokeFunction",
+    "FunctionName": {
+     "Fn::GetAtt": [
+      "managewafattachF1DBAB8B",
+      "Arn"
+     ]
+    },
+    "Principal": "sns.amazonaws.com",
+    "SourceArn": {
+     "Ref": "dynamicWAFTopic8E07E675"
+    }
+   },
+   "Metadata": {
+    "aws:cdk:path": "DynamicWafApiGwStack/manage-waf-attach/snsPermission"
+   }
+  },
+  "TopicKeyB2E0C9CB": {
+   "Type": "AWS::KMS::Key",
+   "Properties": {
+    "KeyPolicy": {
+     "Statement": [
+      {
+       "Action": "kms:*",
+       "Effect": "Allow",
+       "Principal": {
+        "AWS": {
+         "Fn::Join": [
+          "",
+          [
+           "arn:",
+           {
+            "Ref": "AWS::Partition"
+           },
+           ":iam::",
+           {
+            "Ref": "AWS::AccountId"
+           },
+           ":root"
+          ]
+         ]
+        }
+       },
+       "Resource": "*"
+      },
+      {
+       "Action": [
+        "kms:Decrypt",
+        "kms:GenerateDataKey*"
+       ],
+       "Effect": "Allow",
+       "Principal": {
+        "Service": [
+         "cloudwatch.amazonaws.com",
+         "lambda.amazonaws.com"
+        ]
+       },
+       "Resource": "*"
+      }
+     ],
+     "Version": "2012-10-17"
+    }
+   },
+   "UpdateReplacePolicy": "Retain",
+   "DeletionPolicy": "Retain",
+   "Metadata": {
+    "aws:cdk:path": "DynamicWafApiGwStack/TopicKey/Resource"
+   }
+  },
+  "dynamicWAFTopic8E07E675": {
+   "Type": "AWS::SNS::Topic",
+   "Properties": {
+    "KmsMasterKeyId": {
+     "Fn::GetAtt": [
+      "TopicKeyB2E0C9CB",
+      "Arn"
+     ]
+    }
+   },
+   "Metadata": {
+    "aws:cdk:path": "DynamicWafApiGwStack/dynamicWAFTopic/Resource"
+   }
+  },
+  "dynamicWAFLambdaSubscription0EE6B219": {
+   "Type": "AWS::SNS::Subscription",
+   "Properties": {
+    "Protocol": "lambda",
+    "TopicArn": {
+     "Ref": "dynamicWAFTopic8E07E675"
+    },
+    "Endpoint": {
+     "Fn::GetAtt": [
+      "managewafattachF1DBAB8B",
+      "Arn"
+     ]
+    }
+   },
+   "Metadata": {
+    "aws:cdk:path": "DynamicWafApiGwStack/dynamicWAFLambdaSubscription/Resource"
+   }
+  },
+  "APIGW4XXAlarm": {
+   "Type": "AWS::CloudWatch::Alarm",
+   "Properties": {
+    "ComparisonOperator": "GreaterThanUpperThreshold",
+    "EvaluationPeriods": 1,
+    "AlarmActions": [
+     {
+      "Ref": "dynamicWAFTopic8E07E675"
+     }
+    ],
+    "DatapointsToAlarm": 1,
+    "Metrics": [
+     {
+      "Id": "m1",
+      "Label": "4XXError",
+      "MetricStat": {
+       "Metric": {
+        "Dimensions": [
+         {
+          "Name": "ApiName",
+          "Value": {
+           "Ref": "apiName"
+          }
+         },
+         {
+          "Name": "Stage",
+          "Value": {
+           "Fn::Select": [
+            4,
+            {
+             "Fn::Split": [
+              "/",
+              {
+               "Fn::Select": [
+                5,
+                {
+                 "Fn::Split": [
+                  ":",
+                  {
+                   "Ref": "apiGwArn"
+                  }
+                 ]
+                }
+               ]
+              }
+             ]
+            }
+           ]
+          }
+         }
+        ],
+        "MetricName": "4XXError",
+        "Namespace": "AWS/ApiGateway"
+       },
+       "Period": 60,
+       "Stat": "Sum"
+      },
+      "ReturnData": true
+     },
+     {
+      "Expression": "ANOMALY_DETECTION_BAND(m1, 1)",
+      "Id": "ad1",
+      "Label": "4XXError (expected)",
+      "ReturnData": true
+     }
+    ],
+    "OKActions": [
+     {
+      "Ref": "dynamicWAFTopic8E07E675"
+     }
+    ],
+    "ThresholdMetricId": "ad1"
+   },
+   "Metadata": {
+    "aws:cdk:path": "DynamicWafApiGwStack/APIGW4XXAlarm"
+   }
+  },
+  "lambdaroleapikey0D8563C7": {
+   "Type": "AWS::IAM::Role",
+   "Properties": {
+    "AssumeRolePolicyDocument": {
+     "Statement": [
+      {
+       "Action": "sts:AssumeRole",
+       "Effect": "Allow",
+       "Principal": {
+        "Service": "lambda.amazonaws.com"
+       }
+      }
+     ],
+     "Version": "2012-10-17"
+    },
+    "Description": "Allows Lambda get the API Key VAlue",
+    "ManagedPolicyArns": [
+     {
+      "Fn::Join": [
+       "",
+       [
+        "arn:",
+        {
+         "Ref": "AWS::Partition"
+        },
+        ":iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+       ]
+      ]
+     }
+    ],
+    "Policies": [
+     {
+      "PolicyDocument": {
+       "Statement": [
+        {
+         "Action": "apigateway:GET",
+         "Effect": "Allow",
+         "Resource": {
+          "Fn::Join": [
+           "",
+           [
+            "arn:aws:apigateway:",
+            {
+             "Ref": "AWS::Region"
+            },
+            "::/apikeys/",
+            {
+             "Ref": "apiKeyID"
+            }
+           ]
+          ]
+         }
+        }
+       ],
+       "Version": "2012-10-17"
+      },
+      "PolicyName": "get-api-key-value"
+     }
+    ]
+   },
+   "Metadata": {
+    "aws:cdk:path": "DynamicWafApiGwStack/lambda-role-api-key/Resource"
+   }
+  },
+  "lambdaroleapikeyDefaultPolicy1E873F25": {
+   "Type": "AWS::IAM::Policy",
+   "Properties": {
+    "PolicyDocument": {
+     "Statement": [
+      {
+       "Action": "sqs:SendMessage",
+       "Effect": "Allow",
+       "Resource": {
+        "Fn::GetAtt": [
+         "apikeyvalueDeadLetterQueue8B541624",
+         "Arn"
+        ]
+       }
+      }
+     ],
+     "Version": "2012-10-17"
+    },
+    "PolicyName": "lambdaroleapikeyDefaultPolicy1E873F25",
+    "Roles": [
+     {
+      "Ref": "lambdaroleapikey0D8563C7"
+     }
+    ]
+   },
+   "Metadata": {
+    "aws:cdk:path": "DynamicWafApiGwStack/lambda-role-api-key/DefaultPolicy/Resource"
+   }
+  },
+  "apikeyvalueDeadLetterQueue8B541624": {
+   "Type": "AWS::SQS::Queue",
+   "Properties": {
+    "MessageRetentionPeriod": 1209600
+   },
+   "UpdateReplacePolicy": "Delete",
+   "DeletionPolicy": "Delete",
+   "Metadata": {
+    "aws:cdk:path": "DynamicWafApiGwStack/api-key-value/DeadLetterQueue/Resource"
+   }
+  },
+  "apikeyvalue929A79B4": {
+   "Type": "AWS::Lambda::Function",
+   "Properties": {
+    "Code": {
+     "ZipFile": "\n\n#Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.\n#SPDX-License-Identifier: MIT-0\nfrom __future__ import print_function\nimport json\nimport os\nimport boto3\nfrom botocore.exceptions import ClientError\nimport logging\nimport urllib3\n\nlogger = logging.getLogger()\nlogger.setLevel(logging.INFO)\n\nhttp = urllib3.PoolManager()\n\napigw=boto3.client('apigateway')\n\ndef on_event(event, context):\n  logger.info('got event {}'.format(event))\n  request_type = event['RequestType']\n  if request_type == 'Create':\n    return retrieve_key(event,context)\n  elif request_type == 'Update':\n    return retrieve_key(event,context)\n  elif request_type == 'Delete':\n    return send(event,context,\"SUCCESS\",{ 'ApiKeyValue': 'NONE' })\n  else:\n    raise Exception(\"Invalid request type: %s\" % request_type)\n\ndef retrieve_key(event,context):\n  apiKeyId=os.getenv(\"API_KEY\")\n  #retrieve the api key value from API GW\n  try:\n    api_key = apigw.get_api_key(apiKey=apiKeyId, includeValue=True)\n    api_key_value= api_key['value']\n    responseData = {}\n    responseData['ApiKeyValue']= api_key['value']\n  except ClientError as err:\n    logger.error(err)\n    send(event,context,\"FAILED\",{ 'ApiKeyValue': 'NONE' })\n    return\n  responseData = {}\n  responseData['ApiKeyValue']= api_key['value']\n  logger.info('Retrieved Api Key!')\n  return send(event,context,\"SUCCESS\",responseData)\n  \n  #return { 'ApiKeyValue': api_key_value }\n  \ndef send(event, context, responseStatus, responseData, physicalResourceId=None, noEcho=False, reason=None):\n    responseUrl = event['ResponseURL']\n\n    print(responseUrl)\n\n    responseBody = {\n        'Status' : responseStatus,\n        'Reason' : reason or \"See the details in CloudWatch Log Stream: {}\".format(context.log_stream_name),\n        'PhysicalResourceId' : physicalResourceId or context.log_stream_name,\n        'StackId' : event['StackId'],\n        'RequestId' : event['RequestId'],\n        'LogicalResourceId' : event['LogicalResourceId'],\n        'NoEcho' : noEcho,\n        'Data' : responseData\n    }\n\n    json_responseBody = json.dumps(responseBody)\n\n    print(\"Response body:\")\n    print(json_responseBody)\n\n    headers = {\n        'content-type' : '',\n        'content-length' : str(len(json_responseBody))\n    }\n\n    try:\n        response = http.request('PUT', responseUrl, headers=headers, body=json_responseBody)\n        print(\"Status code:\", response.status)\n\n\n    except Exception as e:\n\n        print(\"send(..) failed executing http.request(..):\", e)\n        "
+    },
+    "Role": {
+     "Fn::GetAtt": [
+      "lambdaroleapikey0D8563C7",
+      "Arn"
+     ]
+    },
+    "Architectures": [
+     "arm64"
+    ],
+    "DeadLetterConfig": {
+     "TargetArn": {
+      "Fn::GetAtt": [
+       "apikeyvalueDeadLetterQueue8B541624",
+       "Arn"
+      ]
+     }
+    },
+    "Environment": {
+     "Variables": {
+      "API_KEY": {
+       "Ref": "apiKeyID"
+      }
+     }
+    },
+    "Handler": "index.on_event",
+    "ReservedConcurrentExecutions": 2,
+    "Runtime": "python3.10",
+    "Timeout": 120
+   },
+   "DependsOn": [
+    "lambdaroleapikeyDefaultPolicy1E873F25",
+    "lambdaroleapikey0D8563C7"
+   ],
+   "Metadata": {
+    "aws:cdk:path": "DynamicWafApiGwStack/api-key-value/Resource"
+   }
+  },
+  "ApiKeyValue": {
+   "Type": "AWS::CloudFormation::CustomResource",
+   "Properties": {
+    "ServiceToken": {
+     "Fn::GetAtt": [
+      "apikeyvalue929A79B4",
+      "Arn"
+     ]
+    }
+   },
+   "Metadata": {
+    "aws:cdk:path": "DynamicWafApiGwStack/ApiKeyValue"
+   }
+  },
+  "SampleDistributionForDynamicWAFLoggingBucketD2E8B532": {
+   "Type": "AWS::S3::Bucket",
+   "Properties": {
+    "BucketEncryption": {
+     "ServerSideEncryptionConfiguration": [
+      {
+       "ServerSideEncryptionByDefault": {
+        "SSEAlgorithm": "AES256"
+       }
+      }
+     ]
+    },
+    "OwnershipControls": {
+     "Rules": [
+      {
+       "ObjectOwnership": "ObjectWriter"
+      }
+     ]
+    }
+   },
+   "UpdateReplacePolicy": "Retain",
+   "DeletionPolicy": "Retain",
+   "Metadata": {
+    "aws:cdk:path": "DynamicWafApiGwStack/SampleDistributionForDynamicWAF/LoggingBucket/Resource"
+   }
+  },
+  "SampleDistributionForDynamicWAF59474D82": {
+   "Type": "AWS::CloudFront::Distribution",
+   "Properties": {
+    "DistributionConfig": {
+     "DefaultCacheBehavior": {
+      "CachePolicyId": "4135ea2d-6df8-44a3-9df3-4b5a84be39ad",
+      "Compress": true,
+      "TargetOriginId": "DynamicWafApiGwStackSampleDistributionForDynamicWAFOrigin18F222078",
+      "ViewerProtocolPolicy": "allow-all"
+     },
+     "Enabled": true,
+     "HttpVersion": "http2",
+     "IPV6Enabled": true,
+     "Logging": {
+      "Bucket": {
+       "Fn::GetAtt": [
+        "SampleDistributionForDynamicWAFLoggingBucketD2E8B532",
+        "RegionalDomainName"
+       ]
+      }
+     },
+     "Origins": [
+      {
+       "CustomOriginConfig": {
+        "OriginProtocolPolicy": "https-only",
+        "OriginSSLProtocols": [
+         "TLSv1.2"
+        ]
+       },
+       "DomainName": {
+        "Fn::Join": [
+         ".",
+         [
+          {
+           "Fn::Select": [
+            2,
+            {
+             "Fn::Split": [
+              "/",
+              {
+               "Fn::Select": [
+                5,
+                {
+                 "Fn::Split": [
+                  ":",
+                  {
+                   "Ref": "apiGwArn"
+                  }
+                 ]
+                }
+               ]
+              }
+             ]
+            }
+           ]
+          },
+          "execute-api",
+          {
+           "Fn::Select": [
+            3,
+            {
+             "Fn::Split": [
+              ":",
+              {
+               "Ref": "apiGwArn"
+              }
+             ]
+            }
+           ]
+          },
+          "amazonaws.com"
+         ]
+        ]
+       },
+       "Id": "DynamicWafApiGwStackSampleDistributionForDynamicWAFOrigin18F222078",
+       "OriginCustomHeaders": [
+        {
+         "HeaderName": "x-api-key",
+         "HeaderValue": {
+          "Fn::GetAtt": [
+           "ApiKeyValue",
+           "ApiKeyValue"
+          ]
+         }
+        }
+       ]
+      }
+     ]
+    }
+   },
+   "Metadata": {
+    "aws:cdk:path": "DynamicWafApiGwStack/SampleDistributionForDynamicWAF/Resource"
+   },
+   "Condition": "EnableDistro"
+  }
+ }
+}
