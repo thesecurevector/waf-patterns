@@ -66,7 +66,7 @@ The provided AWS CloudFormation template creates
     * *apiGwArn* is the ARN of the API Gateway you want to protect e.g. arn:aws:apigateway:{region}:{account-id}:/restapis/{api-id}/stages/{stage-id}
     * *apiKeyID* is the API Key ID that is active on the API Gateway stage you would like to protect e.g. 'abcde12345'
     * *apiName* is the name of the API Gateway you want to protect e.g. 'PetStore'
-    * *wafMode* is the Web ACL mode; default is Count. IMPORTANT: We suggest initally deploy the rule as 'Count' and deploy as 'Block' after successful testing. To deploy as block you can update the existing CloudFormation Stack using the same template and simply change the parameter
+    * *wafMode* is the Web ACL mode; default is Count. IMPORTANT: It is a good practice to initally deploy the rule as 'Count' and deploy as 'Block' after successful testing. To deploy as block you can update the existing CloudFormation Stack using the same template changing the parameter
     * *deployDistribution* if set to True, deploy a sample CloudFront Distribution that uses the API Gateway as origin and adds the API Key as custom header
 7. Accept all defaults in next screen clicking Next
 8. Review your configuration and then tick the checkbox "I acknowledge that AWS CloudFormation might create IAM resources" before clicking Submit
@@ -85,17 +85,17 @@ After generating the baseline you can use the provided script [4xxspike.sh](./sc
 ```
 ./4xxspike.sh https://apiID123.execute-api.eu-west-1.amazonaws.com/stage/pets
 ```
- The script performs 500 requests in ~1 minute which should be sufficient to create an anomaly and trigger the alarm. Alternatevely, you can use the jmeter script [waf-test.jmx](./scripts/waf-test.jmx) which makes 600 unauthorized requests and 90  authorized request in ~90 seconds. You can get jmeter from the release page [on the project website][def]
+ The script performs 500 requests in ~1 minute which should be sufficient to create an anomaly and trigger the alarm. Alternatevely, you can use the JMeter script [waf-test.jmx](./scripts/waf-test.jmx) which makes 600 unauthorized requests and 90  authorized request in ~90 seconds. You can get Apache JMeter from the release page [on the project website][def]
 
  ## Test Results
 
- The CloudWatch Anomay Detection baseline will be avaialbile s soon as the CloudWatch alarm collects enough metric from the API Gateway endpoint. In my example the Anomaly Detection algorithm defined an expected 4xxError baseline between 0 and 4.74 requests per minute.
+ The CloudWatch Anomay Detection baseline will be avaialbile as soon as the CloudWatch alarm collects enough metric from the API Gateway endpoint. In my example the Anomaly Detection algorithm defined an expected 4xxError baseline between 0 and 4.74 requests per minute.
 
  <p align="center">
 <img src="./pics/dynamic-waf-test-1.png"  width="800">
 </p>
 
-Now let's create an anomaly. I'll simulate a malicious actor trying to throttle my API Gateway by making requests to the endoiint without proving the api-key secret in header. My API Gteway stage is on purpose set on a very low [throttling limit](https://docs.aws.amazon.com/apigateway/latest/developerguide/api-gateway-request-throttling.html) of 4 request/second, with a bucket of 5 requests. 
+Now let's create an anomaly. I'll throttle my API Gateway by making requests to the endpoint without proving the api-key secret in header. My API Gteway stage is on purpose set on a very low [throttling limit](https://docs.aws.amazon.com/apigateway/latest/developerguide/api-gateway-request-throttling.html) of 4 request/second, with a bucket of 5 requests. 
 
  <p align="center">
 <img src="./pics/dynamic-waf-api-throttling.png"  width="300">
@@ -107,7 +107,7 @@ For this purpose I'll use JMeter. The provided JMeter script sends requests to t
 <img src="./pics/dynamic-waf-too-many-requests.png"  width="500">
 </p>
 
-Uh-oh. It seems that the attacker managed to get it done. My API Gateway is serving 429 - too many requests error through CloudFront back to my client. But in few seconds the alarm triggers the Web ACL Rule.
+The throttling limit is exceeded and API Gateway is now serving 429 - too many requests error through CloudFront back to my client. However, in few minutes the alarm triggers the Web ACL Rule.
 
  <p align="center">
 <img src="./pics/dynamic-waf-in alarm.png"  width="800">
@@ -118,7 +118,7 @@ Uh-oh. It seems that the attacker managed to get it done. My API Gateway is serv
 <img src="./pics/dynamic-waf-in alarm-1.png"  width="800">
 </p>
 
-The WAF starts to block the requests from the attacker before they reach the API Gateway endpoint and my API Gateway starts to send back again data to clients.
+The WAF starts to block the requests before they reach the API Gateway endpoint and my API Gateway starts to send back again data to the client.
 
 
 <p align="center">
